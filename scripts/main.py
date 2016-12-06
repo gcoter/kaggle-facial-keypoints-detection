@@ -24,9 +24,11 @@ output_size = 2*num_keypoints
 
 learning_rate = 1e-3
 
-num_epochs = 20
+num_epochs = 100
 batch_size = 100
 display_step = 10
+
+plot = True
 
 # === GET DATA ===
 def get_data_set(path, train=True):
@@ -156,6 +158,12 @@ with tf.Session() as session:
 	num_examples = len(train_X)
 	num_steps_per_epoch = num_examples/batch_size
 	
+	absolute_step = 0
+	
+	steps = []
+	train_losses = []
+	valid_losses = []
+	
 	print("\nSTART TRAINING (",num_epochs,"epochs,",num_steps_per_epoch,"steps per epoch )")
 	begin_time = time_0 = time.time()
 	
@@ -164,14 +172,18 @@ with tf.Session() as session:
 		for step in range(num_steps_per_epoch):
 			batch_X = train_X[step * batch_size:(step + 1) * batch_size]
 			batch_Y = train_Y[step * batch_size:(step + 1) * batch_size]
-			_, loss_value = session.run([train_step,loss], feed_dict={pixels: batch_X, keypoints: batch_Y})
-			absolute_step = epoch * num_steps_per_epoch + step
+			_, train_loss = session.run([train_step,loss], feed_dict={pixels: batch_X, keypoints: batch_Y})
+			absolute_step += 1
 			
 			if step % display_step == 0:
 				valid_loss = session.run(loss, feed_dict={pixels: valid_X, keypoints: valid_Y})
 			
-				print("Batch Loss =",loss_value,"at step",absolute_step)
+				print("Batch Loss =",train_loss,"at step",absolute_step)
 				print("Validation Loss =",valid_loss,"at step",absolute_step)
+				
+				steps.append(absolute_step)
+				train_losses.append(train_loss)
+				valid_losses.append(valid_loss)
 				
 				# Time spent is measured
 				if absolute_step > 0:
@@ -183,7 +195,8 @@ with tf.Session() as session:
 					
 		last_batch_X = train_X[num_examples * batch_size:]
 		last_batch_Y = train_Y[num_examples * batch_size:]
-		_, loss_value = session.run([train_step,loss], feed_dict={pixels: last_batch_X, keypoints: last_batch_Y})
+		_, train_loss = session.run([train_step,loss], feed_dict={pixels: last_batch_X, keypoints: last_batch_Y})
+		absolute_step += 1
 	
 	total_time = time.time() - begin_time
 	total_time_minutes, total_time_seconds = seconds2minutes(total_time)
@@ -205,6 +218,13 @@ with tf.Session() as session:
 	test_predictions = np.array(test_predictions)
 	test_predictions = test_predictions * image_size/2 + image_size/2
 	print('Test prediction',test_predictions.shape)
+
+# === PLOTTING ===	
+if plot:
+	print("Plotting...")
+	import matplotlib.pyplot as plt
+	plt.plot(steps, train_losses, 'ro', steps, valid_losses, 'bs', label="test1")
+	plt.show()
 	
 # === GENERATE SUBMISSION FILE ===
 print('Generating submission file...')
