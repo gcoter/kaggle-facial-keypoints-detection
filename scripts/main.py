@@ -10,9 +10,13 @@ data_path = "../data/"
 results_path = "../results/"
 train_path = data_path + "training.csv"
 test_path = data_path + "test.csv"
+IdLookupTable_path = results_path + "IdLookupTable.csv"
 output_file_path = results_path + "submission.csv"
 
 validation_proportion = 0.1
+
+keypoint_names = ["left_eye_center_x","left_eye_center_y","right_eye_center_x","right_eye_center_y","left_eye_inner_corner_x","left_eye_inner_corner_y","left_eye_outer_corner_x","left_eye_outer_corner_y","right_eye_inner_corner_x","right_eye_inner_corner_y","right_eye_outer_corner_x","right_eye_outer_corner_y","left_eyebrow_inner_end_x","left_eyebrow_inner_end_y","left_eyebrow_outer_end_x","left_eyebrow_outer_end_y","right_eyebrow_inner_end_x","right_eyebrow_inner_end_y","right_eyebrow_outer_end_x","right_eyebrow_outer_end_y","nose_tip_x","nose_tip_y","mouth_left_corner_x","mouth_left_corner_y","mouth_right_corner_x","mouth_right_corner_y","mouth_center_top_lip_x","mouth_center_top_lip_y","mouth_center_bottom_lip_x","mouth_center_bottom_lip_y"]
+keypoint_indices = dict((keypoint_name, index) for index, keypoint_name in enumerate(keypoint_names))
 
 image_size = 96
 num_keypoints = 15
@@ -23,12 +27,14 @@ num_hidden = 100
 output_size = 2*num_keypoints
 
 learning_rate = 1e-3
+dropout_keep_prob = 0.5
 
-num_epochs = 100
+num_epochs = input("Enter num_epochs: ")
 batch_size = 100
 display_step = 10
 
 plot = True
+generate_results = True
 
 # === GET DATA ===
 def get_data_set(path, train=True):
@@ -46,7 +52,7 @@ def get_data_set(path, train=True):
 	X = np.vstack(df['Image'].values)
 	
 	# Normalize X
-	X = (X  - max_pixel_value/2) / (float(max_pixel_value)/2)
+	X = X / (float(max_pixel_value)/2)
 	
 	if train:
 		# Get Y (keypoints coordinates)
@@ -120,9 +126,9 @@ def simple_relu_layer(input,shape,dropout_keep_prob=None):
 		logits = tf.nn.dropout(logits, dropout_keep_prob)
 	return logits
 	
-def one_hidden_layer_model(input):
+def one_hidden_layer_model(input,dropout_keep_prob=None):
 	with tf.name_scope('hidden_layer'):
-		hidden_logits = simple_relu_layer(input,[input_size,num_hidden])
+		hidden_logits = simple_relu_layer(input,[input_size,num_hidden],dropout_keep_prob=keep_prob)
 	
 	with tf.name_scope('output_layer'):
 		output_logits = simple_linear_layer(hidden_logits,[num_hidden,output_size])
@@ -134,9 +140,10 @@ print ("\nConstructing model...")
 with tf.name_scope('placeholders'):
 	pixels = tf.placeholder(tf.float32, shape=[None, input_size])
 	keypoints = tf.placeholder(tf.float32, shape=[None, output_size])
+	keep_prob = tf.placeholder(tf.float32)
 
 with tf.name_scope('model'):
-	predicted_keypoints = one_hidden_layer_model(pixels)
+	predicted_keypoints = one_hidden_layer_model(pixels,dropout_keep_prob=keep_prob)
 	
 with tf.name_scope('loss'):
 	loss = tf.sqrt(tf.reduce_mean(tf.square(predicted_keypoints - keypoints)))
@@ -172,14 +179,15 @@ with tf.Session() as session:
 		for step in range(num_steps_per_epoch):
 			batch_X = train_X[step * batch_size:(step + 1) * batch_size]
 			batch_Y = train_Y[step * batch_size:(step + 1) * batch_size]
-			_, train_loss = session.run([train_step,loss], feed_dict={pixels: batch_X, keypoints: batch_Y})
+			_, train_loss = session.run([train_step,loss], feed_dict={pixels: batch_X, keypoints: batch_Y, keep_prob: dropout_keep_prob})
 			absolute_step += 1
 			
 			if step % display_step == 0:
-				valid_loss = session.run(loss, feed_dict={pixels: valid_X, keypoints: valid_Y})
+				valid_loss = session.run(loss, feed_dict={pixels: valid_X, keypoints: valid_Y, keep_prob: 1.0})
 			
 				print("Batch Loss =",train_loss,"at step",absolute_step)
 				print("Validation Loss =",valid_loss,"at step",absolute_step)
+				print("Estimated Score =",valid_loss*image_size/2,"at step",absolute_step)
 				
 				steps.append(absolute_step)
 				train_losses.append(train_loss)
@@ -195,7 +203,7 @@ with tf.Session() as session:
 					
 		last_batch_X = train_X[num_examples * batch_size:]
 		last_batch_Y = train_Y[num_examples * batch_size:]
-		_, train_loss = session.run([train_step,loss], feed_dict={pixels: last_batch_X, keypoints: last_batch_Y})
+		_, train_loss = session.run([train_step,loss], feed_dict={pixels: last_batch_X, keypoints: last_batch_Y, keep_prob: dropout_keep_prob})
 		absolute_step += 1
 	
 	total_time = time.time() - begin_time
@@ -208,11 +216,11 @@ with tf.Session() as session:
 	print('\n*** Start testing (',num_test_steps,'steps ) ***')
 	for step in range(num_test_steps):
 		batch_X = test_X[step * batch_size:(step + 1) * batch_size]
-		pred = session.run(predicted_keypoints, feed_dict={pixels : batch_X})
+		pred = session.run(predicted_keypoints, feed_dict={pixels : batch_X, keep_prob: 1.0})
 		test_predictions.extend(pred)
 		
 	last_batch_X = test_X[num_test_steps * batch_size:]
-	pred = session.run(predicted_keypoints, feed_dict={pixels : last_batch_X})
+	pred = session.run(predicted_keypoints, feed_dict={pixels : last_batch_X, keep_prob: 1.0})
 	test_predictions.extend(pred)
 		
 	test_predictions = np.array(test_predictions)
@@ -223,18 +231,34 @@ with tf.Session() as session:
 if plot:
 	print("Plotting...")
 	import matplotlib.pyplot as plt
-	plt.plot(steps, train_losses, 'ro', steps, valid_losses, 'bs', label="test1")
+	plt.plot(steps, train_losses, 'ro', steps, valid_losses, 'bs')
+	x1,x2,y1,y2 = plt.axis()
+	# plt.axis((x1,x2,0,50))
 	plt.show()
 	
 # === GENERATE SUBMISSION FILE ===
-print('Generating submission file...')
-with open(output_file_path, 'w') as csvfile:
-	writer = csv.writer(csvfile, delimiter=',')
-	writer.writerow(['RowId','Location'])
-	rowid = 1
-	for i in range(len(test_predictions)):
-		predictions = test_predictions[i]
-		for j in range(len(predictions)):
-			writer.writerow([rowid,predictions[j]])
-			rowid += 1
-	print('Results saved to',output_file_path)
+def get_predictions_indices(IdLookupTable,keypoint_indices,imageId):
+	feature_names = IdLookupTable[IdLookupTable["ImageId"] == imageId]["FeatureName"].tolist()
+	return [keypoint_indices[feature_name] for feature_name in feature_names]
+
+if generate_results:
+	print("Reading IdLookupTable...")
+	IdLookupTable = pd.read_csv(IdLookupTable_path)
+
+	print('Generating submission file...')
+	with open(output_file_path, 'w') as csvfile:
+		writer = csv.writer(csvfile, delimiter=',')
+		writer.writerow(['RowId','Location'])
+		rowid = 1
+		for i in range(len(test_predictions)):
+			imageId = i + 1
+			predictions = test_predictions[i]
+			for j in get_predictions_indices(IdLookupTable,keypoint_indices,imageId):
+				prediction = predictions[j]
+				if prediction < 0:
+					prediction = 0
+				elif prediction > image_size:
+					prediction = image_size
+				writer.writerow([rowid,prediction])
+				rowid += 1
+		print('Results saved to',output_file_path)
