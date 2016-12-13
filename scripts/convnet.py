@@ -254,10 +254,11 @@ with tf.Session() as session:
 					
 					print("Time:",d,"s to compute",display_step,"steps")
 					
-		last_batch_X = train_X[num_examples * batch_size:]
-		last_batch_Y = train_Y[num_examples * batch_size:]
-		_, train_loss = session.run([train_step,loss], feed_dict={pixels: last_batch_X, keypoints: last_batch_Y, keep_prob: dropout_keep_prob})
-		absolute_step += 1
+		if num_steps_per_epoch * batch_size < num_examples:
+			last_batch_X = train_X[num_steps_per_epoch * batch_size:]
+			last_batch_Y = train_Y[num_steps_per_epoch * batch_size:]
+			_, train_loss = session.run([train_step,loss], feed_dict={pixels: last_batch_X, keypoints: last_batch_Y, keep_prob: dropout_keep_prob})
+			absolute_step += 1
 	
 	total_time = time.time() - begin_time
 	total_time_minutes, total_time_seconds = seconds2minutes(total_time)
