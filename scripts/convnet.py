@@ -27,9 +27,9 @@ num_hidden = 100
 output_size = 2*num_keypoints
 
 learning_rate = 1e-3
-dropout_keep_prob = 0.5
+dropout_keep_prob = 1.0
 
-num_epochs = input("Enter num_epochs: ")
+num_epochs = int(input("Enter num_epochs: "))
 batch_size = 100
 display_step = 10
 
@@ -155,32 +155,54 @@ def max_pool(input,k=2):
   
 def average_pool(input,k=2,stride=2):
 	return tf.nn.avg_pool(input, ksize=[1, k, k, 1], strides=[1, stride, stride, 1], padding='SAME')
+
+# newDepth must be divisible by 8 and 16
+def inception_module(input,currentDepth,newDepth,dropout_keep_prob=None):
+	with tf.variable_scope('1x1_branch'):
+		with tf.variable_scope('initial_1x1'):
+			initial_1x1 = complete_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
+		with tf.variable_scope('5x5'):
+			conv_5x5 = complete_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
+			conv_5x5 = complete_conv2d(conv_5x5,currentDepth=newDepth//8,newDepth=newDepth//4,patch_size=5)
+		with tf.variable_scope('3x3'):
+			conv_3x3 = complete_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
+			conv_3x3 = complete_conv2d(conv_3x3,currentDepth=newDepth//8,newDepth=newDepth//4,patch_size=3)
+	with tf.variable_scope('avg_pool_branch'):
+		with tf.variable_scope('initial_avg_pool'):
+			initial_avg_pool = average_pool(input, stride=1)
+		with tf.variable_scope('1x1'):
+			conv_1x1 = complete_conv2d(initial_avg_pool,currentDepth=currentDepth,newDepth=(newDepth//4+newDepth//8),patch_size=1)
+	with tf.variable_scope('concatenation'):
+		inception_output = tf.concat(3, [initial_1x1, conv_5x5, conv_3x3, conv_1x1])
+	if not dropout_keep_prob is None:
+		inception_output = tf.nn.dropout(inception_output, dropout_keep_prob)
+	return inception_output
 	
 def convnet(input,dropout_keep_prob=None):
 	reshaped_input = tf.reshape(input, [-1,image_size,image_size,1]) # (N,96,96,1)
 	
 	with tf.name_scope('conv_1'):
-		net = complete_conv2d(reshaped_input, currentDepth=1, newDepth=16, patch_size=5) # (N,96,96,16)
+		net = inception_module(reshaped_input, currentDepth=1, newDepth=32) # (N,96,96,32)
 	with tf.name_scope('max_pool_1'):
-		net = max_pool(net) # (N,48,48,16)
-	with tf.name_scope('conv_2'):
-		net = complete_conv2d(net, currentDepth=16, newDepth=32, patch_size=5) # (N,48,48,32)
+		net = average_pool(net) # (N,48,48,32)
+	with tf.name_scope('inception_module_1'):
+		net = inception_module(net, currentDepth=32, newDepth=64) # (N,48,48,64)
 	with tf.name_scope('max_pool_2'):
-		net = max_pool(net) # (N,24,24,32)
-	with tf.name_scope('conv_3'):
-		net = complete_conv2d(net, currentDepth=32, newDepth=48, patch_size=5) # (N,24,24,48)
+		net = average_pool(net) # (N,24,24,64)
+	with tf.name_scope('inception_module_2'):
+		net = inception_module(net, currentDepth=64, newDepth=96) # (N,24,24,96)
 	with tf.name_scope('max_pool_3'):
-		net = max_pool(net) # (N,12,12,48)
-	with tf.name_scope('conv_4'):
-		net = complete_conv2d(net, currentDepth=48, newDepth=64, patch_size=3) # (N,12,12,64)
+		net = max_pool(net) # (N,12,12,96)
+	with tf.name_scope('inception_module_3'):
+		net = inception_module(net, currentDepth=96, newDepth=128) # (N,12,12,96)
 	with tf.name_scope('max_pool_4'):
-		net = max_pool(net) # (N,6,6,64)
+		net = max_pool(net) # (N,6,6,128)
 	
-	image_size_after_conv = image_size/16
-	reshaped_conv_output = tf.reshape(net, [-1, image_size_after_conv*image_size_after_conv*64])
+	image_size_after_conv = image_size//16
+	reshaped_conv_output = tf.reshape(net, [-1, image_size_after_conv*image_size_after_conv*128])
 		
 	with tf.name_scope('hidden_layer_1'):
-		hidden_layer_1 = simple_relu_layer(reshaped_conv_output, shape=[image_size_after_conv*image_size_after_conv*64,1000],dropout_keep_prob=dropout_keep_prob)
+		hidden_layer_1 = simple_relu_layer(reshaped_conv_output, shape=[image_size_after_conv*image_size_after_conv*128,1000],dropout_keep_prob=dropout_keep_prob)
 	with tf.name_scope('hidden_layer_2'):
 		hidden_layer_2 = simple_relu_layer(hidden_layer_1, shape=[1000,100],dropout_keep_prob=dropout_keep_prob)
 	with tf.name_scope('output_layer'):
@@ -204,11 +226,11 @@ with tf.name_scope('loss'):
 with tf.name_scope('Train_step'):
 	train_step = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 	
-init = tf.initialize_all_variables()
+init = tf.global_variables_initializer()
 	
 # === TRAINING MODEL ===
 def seconds2minutes(time):
-	minutes = int(time) / 60
+	minutes = int(time) // 60
 	seconds = int(time) % 60
 	return minutes, seconds
 	
@@ -216,7 +238,7 @@ with tf.Session() as session:
 	session.run(init)
 	
 	num_examples = len(train_X)
-	num_steps_per_epoch = num_examples/batch_size
+	num_steps_per_epoch = num_examples//batch_size
 	
 	absolute_step = 0
 	
@@ -266,7 +288,7 @@ with tf.Session() as session:
 	
 	# === TEST ===
 	test_predictions = []
-	num_test_steps = len(test_X)/batch_size
+	num_test_steps = len(test_X)//batch_size
 	print('\n*** Start testing (',num_test_steps,'steps ) ***')
 	for step in range(num_test_steps):
 		batch_X = test_X[step * batch_size:(step + 1) * batch_size]
