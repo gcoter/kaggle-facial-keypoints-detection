@@ -29,12 +29,14 @@ output_size = 2*num_keypoints
 learning_rate = 1e-3
 dropout_keep_prob = 0.5
 
-num_epochs = input("Enter num_epochs: ")
+num_epochs = 200
 batch_size = 100
 display_step = 10
 
 plot = True
 generate_results = True
+
+flip_indices = [(0, 2), (1, 3), (4, 8), (5, 9), (6, 10), (7, 11), (12, 16), (13, 17), (14, 18), (15, 19), (22, 24), (23, 25)]
 
 # === GET DATA ===
 def get_data_set(path, train=True):
@@ -104,12 +106,18 @@ print(test_X.shape)
 print("test_X[0]:",test_X[0])
 
 # === MODEL ===
-def new_weights(shape):
-	initial = tf.random_normal(shape)
+def new_weights(shape, xavier=True):
+	dev = 1.0
+	if xavier and len(shape) == 2:
+		dev = 1/shape[0]
+	initial = tf.random_normal(shape, stddev=dev)
 	return tf.Variable(initial)
 	
-def new_biases(shape):
-	initial = tf.random_normal(shape)
+def new_biases(shape, xavier=True):
+	dev = 1.0
+	if xavier and len(shape) == 2:
+		dev = 1/shape[0]
+	initial = tf.random_normal(shape, stddev=dev)
 	return tf.Variable(initial)
 	
 def simple_linear_layer(input,shape):
@@ -155,7 +163,7 @@ init = tf.initialize_all_variables()
 	
 # === TRAINING MODEL ===
 def seconds2minutes(time):
-	minutes = int(time) / 60
+	minutes = int(time) // 60
 	seconds = int(time) % 60
 	return minutes, seconds
 	
@@ -163,7 +171,7 @@ with tf.Session() as session:
 	session.run(init)
 	
 	num_examples = len(train_X)
-	num_steps_per_epoch = num_examples/batch_size
+	num_steps_per_epoch = num_examples//batch_size
 	
 	absolute_step = 0
 	
@@ -179,10 +187,12 @@ with tf.Session() as session:
 		for step in range(num_steps_per_epoch):
 			batch_X = train_X[step * batch_size:(step + 1) * batch_size]
 			batch_Y = train_Y[step * batch_size:(step + 1) * batch_size]
-			_, train_loss = session.run([train_step,loss], feed_dict={pixels: batch_X, keypoints: batch_Y, keep_prob: dropout_keep_prob})
+			_ = session.run(train_step, feed_dict={pixels: batch_X, keypoints: batch_Y, keep_prob: dropout_keep_prob})
+			
 			absolute_step += 1
 			
 			if step % display_step == 0:
+				train_loss = session.run(loss, feed_dict={pixels: batch_X, keypoints: batch_Y, keep_prob: 1.0})
 				valid_loss = session.run(loss, feed_dict={pixels: valid_X, keypoints: valid_Y, keep_prob: 1.0})
 			
 				print("Batch Loss =",train_loss,"at step",absolute_step)
@@ -203,7 +213,7 @@ with tf.Session() as session:
 					
 		last_batch_X = train_X[num_examples * batch_size:]
 		last_batch_Y = train_Y[num_examples * batch_size:]
-		_, train_loss = session.run([train_step,loss], feed_dict={pixels: last_batch_X, keypoints: last_batch_Y, keep_prob: dropout_keep_prob})
+		_ = session.run(train_step, feed_dict={pixels: last_batch_X, keypoints: last_batch_Y, keep_prob: dropout_keep_prob})
 		absolute_step += 1
 	
 	total_time = time.time() - begin_time
@@ -212,7 +222,7 @@ with tf.Session() as session:
 	
 	# === TEST ===
 	test_predictions = []
-	num_test_steps = len(test_X)/batch_size
+	num_test_steps = len(test_X)//batch_size
 	print('\n*** Start testing (',num_test_steps,'steps ) ***')
 	for step in range(num_test_steps):
 		batch_X = test_X[step * batch_size:(step + 1) * batch_size]
