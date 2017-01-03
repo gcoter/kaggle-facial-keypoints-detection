@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 import time
 import csv
+import matplotlib.pyplot as plt
 
 # === CONSTANTS ===
 data_path = "../data/"
@@ -26,15 +27,17 @@ input_size = image_size*image_size
 num_hidden = 100
 output_size = 2*num_keypoints
 
-learning_rate = 1e-3
-dropout_keep_prob = 1.0
+learning_rate = 1e-4
+dropout_keep_prob = 0.9
 
-num_epochs = int(input("Enter num_epochs: "))
+num_epochs = 200
 batch_size = 100
 display_step = 10
 
 plot = True
 generate_results = True
+
+flip_indices = [(0, 2), (1, 3), (4, 8), (5, 9), (6, 10), (7, 11), (12, 16), (13, 17), (14, 18), (15, 19), (22, 24), (23, 25)]
 
 # === GET DATA ===
 def get_data_set(path, train=True):
@@ -103,6 +106,30 @@ print("\nTest X")
 print(test_X.shape)
 print("test_X[0]:",test_X[0])
 
+def flip(x,y,flip_indices):
+	# Flip half of the images in this batch at random:
+	bs = x.shape[0]
+	indices = np.random.choice(bs, bs // 2, replace=False)
+
+	x_copy = np.copy(x)
+	y_copy = np.copy(y)
+
+	# Horizontal flip of all x coordinates:
+	x_copy = x_copy.reshape((-1,image_size,image_size,1))
+	x_copy[indices] = x_copy[indices, :, ::-1, :]
+
+	# Horizontal flip of all x coordinates:
+	y_copy[indices, ::2] = y_copy[indices, ::2] * -1
+
+	# Swap places, e.g. left_eye_center_x -> right_eye_center_x
+	for a, b in flip_indices:
+		temp = np.copy(y_copy[indices, a])
+		y_copy[indices, a] = y_copy[indices, b]
+		y_copy[indices, b] = temp
+		
+	x_copy = x_copy.reshape((-1,image_size*image_size*1))
+	return x_copy,y_copy,indices
+
 # === MODEL ===
 def new_weights(shape, xavier=True):
 	dev = 1.0
@@ -141,10 +168,14 @@ def simple_relu_layer(input,shape,dropout_keep_prob=None):
 def conv2d(input, W):
 	return tf.nn.conv2d(input, W, strides=[1, 1, 1, 1], padding='SAME')
 	
-def complete_conv2d(input,currentDepth,newDepth,patch_size,dropout_keep_prob=None):
+def simple_conv2d(input,currentDepth,newDepth,patch_size):
 	weights_conv = new_weights([patch_size,patch_size,currentDepth,newDepth])
-	biases_conv = new_biases([newDepth])
 	conv = conv2d(input, weights_conv)
+	return conv
+	
+def complete_conv2d(input,currentDepth,newDepth,patch_size,dropout_keep_prob=None):
+	conv = simple_conv2d(input,currentDepth,newDepth,patch_size)
+	biases_conv = new_biases([newDepth])
 	h_conv = tf.nn.relu(conv + biases_conv)
 	if not dropout_keep_prob is None:
 		h_conv = tf.nn.dropout(h_conv, dropout_keep_prob)
@@ -160,18 +191,18 @@ def average_pool(input,k=2,stride=2):
 def inception_module(input,currentDepth,newDepth,dropout_keep_prob=None):
 	with tf.variable_scope('1x1_branch'):
 		with tf.variable_scope('initial_1x1'):
-			initial_1x1 = complete_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
+			initial_1x1 = simple_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
 		with tf.variable_scope('5x5'):
-			conv_5x5 = complete_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
-			conv_5x5 = complete_conv2d(conv_5x5,currentDepth=newDepth//8,newDepth=newDepth//4,patch_size=5)
+			conv_5x5 = simple_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
+			conv_5x5 = simple_conv2d(conv_5x5,currentDepth=newDepth//8,newDepth=newDepth//4,patch_size=5)
 		with tf.variable_scope('3x3'):
-			conv_3x3 = complete_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
-			conv_3x3 = complete_conv2d(conv_3x3,currentDepth=newDepth//8,newDepth=newDepth//4,patch_size=3)
+			conv_3x3 = simple_conv2d(input,currentDepth=currentDepth,newDepth=newDepth//8,patch_size=1)
+			conv_3x3 = simple_conv2d(conv_3x3,currentDepth=newDepth//8,newDepth=newDepth//4,patch_size=3)
 	with tf.variable_scope('avg_pool_branch'):
 		with tf.variable_scope('initial_avg_pool'):
 			initial_avg_pool = average_pool(input, stride=1)
 		with tf.variable_scope('1x1'):
-			conv_1x1 = complete_conv2d(initial_avg_pool,currentDepth=currentDepth,newDepth=(newDepth//4+newDepth//8),patch_size=1)
+			conv_1x1 = simple_conv2d(initial_avg_pool,currentDepth=currentDepth,newDepth=(newDepth//4+newDepth//8),patch_size=1)
 	with tf.variable_scope('concatenation'):
 		inception_output = tf.concat(3, [initial_1x1, conv_5x5, conv_3x3, conv_1x1])
 	if not dropout_keep_prob is None:
@@ -185,15 +216,15 @@ def convnet(input,dropout_keep_prob=None):
 		net = inception_module(reshaped_input, currentDepth=1, newDepth=32) # (N,96,96,32)
 	with tf.name_scope('max_pool_1'):
 		net = average_pool(net) # (N,48,48,32)
-	with tf.name_scope('inception_module_1'):
+	with tf.name_scope('conv_2'):
 		net = inception_module(net, currentDepth=32, newDepth=64) # (N,48,48,64)
 	with tf.name_scope('max_pool_2'):
 		net = average_pool(net) # (N,24,24,64)
-	with tf.name_scope('inception_module_2'):
+	with tf.name_scope('conv_3'):
 		net = inception_module(net, currentDepth=64, newDepth=96) # (N,24,24,96)
 	with tf.name_scope('max_pool_3'):
 		net = max_pool(net) # (N,12,12,96)
-	with tf.name_scope('inception_module_3'):
+	with tf.name_scope('conv_4'):
 		net = inception_module(net, currentDepth=96, newDepth=128) # (N,12,12,96)
 	with tf.name_scope('max_pool_4'):
 		net = max_pool(net) # (N,6,6,128)
@@ -204,9 +235,9 @@ def convnet(input,dropout_keep_prob=None):
 	with tf.name_scope('hidden_layer_1'):
 		hidden_layer_1 = simple_relu_layer(reshaped_conv_output, shape=[image_size_after_conv*image_size_after_conv*128,1000],dropout_keep_prob=dropout_keep_prob)
 	with tf.name_scope('hidden_layer_2'):
-		hidden_layer_2 = simple_relu_layer(hidden_layer_1, shape=[1000,100],dropout_keep_prob=dropout_keep_prob)
+		hidden_layer_2 = simple_relu_layer(hidden_layer_1, shape=[1000,500],dropout_keep_prob=dropout_keep_prob)
 	with tf.name_scope('output_layer'):
-		output_logits = simple_linear_layer(hidden_layer_2, shape=[100,output_size])
+		output_logits = simple_linear_layer(hidden_layer_2, shape=[500,output_size])
 		
 	return output_logits
 
@@ -233,7 +264,7 @@ def seconds2minutes(time):
 	minutes = int(time) // 60
 	seconds = int(time) % 60
 	return minutes, seconds
-	
+
 with tf.Session() as session:
 	session.run(init)
 	
@@ -254,10 +285,16 @@ with tf.Session() as session:
 		for step in range(num_steps_per_epoch):
 			batch_X = train_X[step * batch_size:(step + 1) * batch_size]
 			batch_Y = train_Y[step * batch_size:(step + 1) * batch_size]
-			_, train_loss = session.run([train_step,loss], feed_dict={pixels: batch_X, keypoints: batch_Y, keep_prob: dropout_keep_prob})
+			_ = session.run(train_step, feed_dict={pixels: batch_X, keypoints: batch_Y, keep_prob: dropout_keep_prob})
+			
+			# Flip
+			batch_X_flipped, batch_Y_flipped, indices = flip(batch_X,batch_Y,flip_indices)
+			_ = session.run(train_step, feed_dict={pixels: batch_X_flipped[indices], keypoints: batch_Y_flipped[indices], keep_prob: dropout_keep_prob})
+			
 			absolute_step += 1
 			
 			if step % display_step == 0:
+				train_loss = session.run(loss, feed_dict={pixels: batch_X, keypoints: batch_Y, keep_prob: 1.0})
 				valid_loss = session.run(loss, feed_dict={pixels: valid_X, keypoints: valid_Y, keep_prob: 1.0})
 			
 				print("Batch Loss =",train_loss,"at step",absolute_step)
