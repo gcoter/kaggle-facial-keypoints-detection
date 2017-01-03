@@ -27,7 +27,7 @@ input_size = image_size*image_size
 num_hidden = 100
 output_size = 2*num_keypoints
 
-learning_rate = 1e-4
+learning_rate = 1e-3
 dropout_keep_prob = 0.9
 
 num_epochs = 200
@@ -213,11 +213,11 @@ def convnet(input,dropout_keep_prob=None):
 	reshaped_input = tf.reshape(input, [-1,image_size,image_size,1]) # (N,96,96,1)
 	
 	with tf.name_scope('conv_1'):
-		net = inception_module(reshaped_input, currentDepth=1, newDepth=32) # (N,96,96,32)
+		net = simple_conv2d(reshaped_input, currentDepth=1, newDepth=32, patch_size=5) # (N,96,96,32)
 	with tf.name_scope('max_pool_1'):
 		net = average_pool(net) # (N,48,48,32)
 	with tf.name_scope('conv_2'):
-		net = inception_module(net, currentDepth=32, newDepth=64) # (N,48,48,64)
+		net = simple_conv2d(net, currentDepth=32, newDepth=64, patch_size=3) # (N,48,48,64)
 	with tf.name_scope('max_pool_2'):
 		net = average_pool(net) # (N,24,24,64)
 	with tf.name_scope('conv_3'):
