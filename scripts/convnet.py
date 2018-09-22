@@ -204,7 +204,7 @@ def inception_module(input,currentDepth,newDepth,dropout_keep_prob=None):
 		with tf.variable_scope('1x1'):
 			conv_1x1 = simple_conv2d(initial_avg_pool,currentDepth=currentDepth,newDepth=(newDepth//4+newDepth//8),patch_size=1)
 	with tf.variable_scope('concatenation'):
-		inception_output = tf.concat(3, [initial_1x1, conv_5x5, conv_3x3, conv_1x1])
+		inception_output = tf.concat([initial_1x1, conv_5x5, conv_3x3, conv_1x1], 3)
 	if not dropout_keep_prob is None:
 		inception_output = tf.nn.dropout(inception_output, dropout_keep_prob)
 	return inception_output
@@ -267,6 +267,9 @@ def seconds2minutes(time):
 
 with tf.Session() as session:
 	session.run(init)
+	
+	writer = tf.summary.FileWriter("../logs/convnet")
+	writer.add_graph(session.graph)
 	
 	num_examples = len(train_X)
 	num_steps_per_epoch = num_examples//batch_size
